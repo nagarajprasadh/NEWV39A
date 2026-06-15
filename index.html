@@ -53,6 +53,8 @@
 
 
   .two-status td:last-child, .two-status td:nth-last-child(2) { min-width:90px; }
+  .date-input { border:1px solid #c0d0e8; border-radius:4px; padding:3px 6px; font-size:0.82rem; color:#334155; background:white; width:132px; }
+  .date-input:focus { outline:none; border-color:#2563a8; }
   .zip-note { font-size:0.82rem; color:#475569; margin-top:10px; padding:8px 12px;
               background:#f1f5f9; border-radius:6px; border-left:3px solid #2563a8; }
 
@@ -75,12 +77,12 @@
       <div class="field-row"><b>Name</b> <span class="arrow">&#8594;</span> Applicant full name</div>
       <div class="field-row"><b>Country</b> <span class="arrow">&#8594;</span> Country / place of origin</div>
       <div class="field-row"><b>Passport</b> <span class="arrow">&#8594;</span> Passport / travel document number</div>
-      <div class="field-row"><b>From</b> <span class="arrow">&#8594;</span> Country / place of embarkation</div>
+      <div class="field-row"><b>ConsulateCity</b> <span class="arrow">&#8594;</span> City where the Singapore Consulate is located</div>
       <div class="field-row"><b>Date</b> <span class="arrow">&#8594;</span> Date of V39A application</div>
       <div style="margin-top:8px;color:#64748b;font-size:0.8rem;font-weight:600;">&#9472; Invitation Letter fields</div>
       <div class="field-row"><b>Company</b> <span class="arrow">&#8594;</span> Applicant&#39;s employer / organisation</div>
-      <div class="field-row"><b>VisitDate</b> <span class="arrow">&#8594;</span> Visit start date (e.g. 29 May 2026)</div>
-      <div class="field-row"><b>VisitDays</b> <span class="arrow">&#8594;</span> Duration in days (e.g. 6)</div>
+      <div class="field-row"><b>Arrival</b> <span class="arrow">&#8594;</span> Arrival date in Singapore (YYYY-MM-DD or text)</div>
+      <div class="field-row"><b>Departure</b> <span class="arrow">&#8594;</span> Departure date from Singapore (YYYY-MM-DD or text)</div>
       <div class="field-row"><b>Pronoun</b> <span class="arrow">&#8594;</span> Subject pronoun: <code>he</code> / <code>she</code> / <code>they</code></div>
     </div>
     <div style="margin-top:10px;"><span class="sample-link" onclick="downloadSample()">&#8681; Download sample CSV</span></div>
@@ -98,7 +100,7 @@
       <table id="previewTable" class="two-status">
         <thead><tr>
           <th>#</th><th>Name</th><th>Passport</th><th>Company</th>
-          <th>Visit Date</th><th>Days</th><th>Pronoun</th>
+          <th>Arrival</th><th>Departure</th><th>Pronoun</th>
           <th>V39A</th><th>Letter</th>
         </tr></thead>
         <tbody id="previewBody"></tbody>
@@ -126,11 +128,31 @@ var FIELD_MAP = {
   Name:     'countryplace holder of passporttravel document no',
   Country:  'The applicant for the visa',
   Passport: 'is',
-  From:     'countryplace',
+  ConsulateCity: 'countryplace',
   Date:     'Date'
 };
 
 var rows = [];
+
+// ── Date helpers ─────────────────────────────────────────────────────────────
+function formatDateForPDF(val) {
+  if (!val) return '';
+  var isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(val);
+  if (isoMatch) {
+    var months = ['January','February','March','April','May','June',
+                  'July','August','September','October','November','December'];
+    var d = new Date(parseInt(isoMatch[1]), parseInt(isoMatch[2])-1, parseInt(isoMatch[3]));
+    return d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+  }
+  return val; // already readable text
+}
+function parseToISODate(str) {
+  if (!str) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  var d = new Date(str);
+  if (isNaN(d.getTime())) return str;
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
 
 // ── CSV parser ──────────────────────────────────────────────────────────────
 function parseCSV(text) {
@@ -185,11 +207,15 @@ async function fillLetterPDF(row) {
   var fontBold = await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
 
   var name      = row.Name      || '';
+  // Convert ALL-CAPS name to Title Case in the letter
+  if (name && name === name.toUpperCase()) {
+    name = name.replace(/\S+/g, function(w){ return w.charAt(0).toUpperCase()+w.slice(1).toLowerCase(); });
+  }
   var company   = row.Company   || 'Intellect Design Arena Limited, India';
   var passport  = row.Passport  || '';
   var country   = row.Country   || 'Indian';
-  var visitDate = row.VisitDate || '';
-  var visitDays = row.VisitDays || '';
+  var visitDate = formatDateForPDF(row.Arrival || '');
+  var departure = formatDateForPDF(row.Departure || '');
   var pronoun   = (row.Pronoun  || 'he').toLowerCase().trim();
   var pronounObj = ({ she:'her', they:'them' })[pronoun] || 'him';
 
@@ -252,7 +278,7 @@ async function fillLetterPDF(row) {
 
   drawT('The Visa Officer',                 LM, 616);
   drawT('Consulate General of Singapore,',  LM, 600);
-  drawT('New Delhi, India',                 LM, 584);
+  drawT(row.ConsulateCity || 'New Delhi, India', LM, 584);
 
   // Subject — centred, bold, underlined
   var subj  = 'Subject: Request for Business Visa for ' + name;
@@ -273,8 +299,8 @@ async function fillLetterPDF(row) {
   y -= (PG-LH);   // extra inter-paragraph spacing
 
   // ── Para 2 — justified ──
-  var p2 = 'The proposed duration of the visit is from ' + visitDate + ' for ' + visitDays +
-           ' days. During this period, ' + pronoun + ' will be attending scheduled meetings' +
+  var p2 = 'The proposed duration of the visit is from ' + visitDate + ' to ' + departure +
+           '. During this period, ' + pronoun + ' will be attending scheduled meetings' +
            ' with our clients and also exploring future business collaboration opportunities.' +
            ' The visit is essential for strategic discussions, leadership engagement and' +
            ' advancing Intellect\u2019s global innovation agenda.';
@@ -320,7 +346,7 @@ async function generateAll() {
   for (var i=0; i<rows.length; i++) {
     var row = rows[i];
     var tr  = tbody.rows[i];
-    // cols: 0=# 1=Name 2=Passport 3=Company 4=VisitDate 5=Days 6=Pronoun 7=V39A 8=Letter
+    // cols: 0=# 1=Name 2=Passport 3=Company 4=Arrival 5=Departure 6=Pronoun 7=V39A 8=Letter
     var v39aCell   = tr.cells[7];
     var letterCell = tr.cells[8];
     var suf = sanitize(row.Name || ('row_'+(i+1)));
@@ -377,17 +403,23 @@ function renderPreview() {
   tbody.innerHTML='';
   rows.forEach(function(row,i){
     var tr=document.createElement('tr');
+    var arrISO=parseToISODate(row.Arrival||'');
+    var depISO=parseToISODate(row.Departure||'');
+    rows[i].Arrival=arrISO;
+    rows[i].Departure=depISO;
     tr.innerHTML=
       '<td>'+(i+1)+'</td>'+
       '<td>'+(row.Name||'')+'</td>'+
       '<td>'+(row.Passport||'')+'</td>'+
       '<td>'+(row.Company||'')+'</td>'+
-      '<td>'+(row.VisitDate||'')+'</td>'+
-      '<td>'+(row.VisitDays||'')+'</td>'+
+      '<td><input type="date" class="date-input" value="'+arrISO+'"></td>'+
+      '<td><input type="date" class="date-input" value="'+depISO+'"></td>'+
       '<td>'+(row.Pronoun||'')+'</td>'+
       '<td><span class="status-badge status-pending">Pending</span></td>'+
       '<td><span class="status-badge status-pending">Pending</span></td>';
     tbody.appendChild(tr);
+    tr.cells[4].querySelector('input').addEventListener('change',function(){ rows[i].Arrival=this.value; });
+    tr.cells[5].querySelector('input').addEventListener('change',function(){ rows[i].Departure=this.value; });
   });
   document.getElementById('rowCount').textContent=rows.length+' row'+(rows.length!==1?'s':'');
   document.getElementById('previewCard').style.display='block';
@@ -406,9 +438,9 @@ function resetApp() {
 
 function downloadSample() {
   var csv=
-    'Name,Country,Passport,From,Date,Company,VisitDate,VisitDays,Pronoun\n'+
-    'Mahesh Kumar Jakhetiya,India,Z5323555,India,24 April 2026,Intellect Design Arena Limited India,29 May 2026,6,he\n'+
-    'Priya Sharma,India,A1234567,India,24 April 2026,Intellect Design Arena Limited India,29 May 2026,4,she';
+    'Name,Country,Passport,ConsulateCity,Date,Company,Arrival,Departure,Pronoun\n'+
+    'Mahesh Kumar Jakhetiya,India,Z5323555,Bangkok,24 April 2026,Intellect Design Arena Limited India,2026-05-29,2026-06-04,he\n'+
+    'Priya Sharma,India,A1234567,Bangkok,24 April 2026,Intellect Design Arena Limited India,2026-05-29,2026-06-04,she';
   var blob=new Blob([csv],{type:'text/csv'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a'); a.href=url; a.download='visa_sample.csv';
@@ -422,7 +454,7 @@ function loadCSV(file) {
   reader.onload=function(ev){
     rows=parseCSV(ev.target.result);
     if(rows.length) renderPreview();
-    else alert('No data rows found.\nExpected headers:\nName, Country, Passport, From, Date, Company, VisitDate, VisitDays, Pronoun');
+    else alert('No data rows found.\nExpected headers:\nName, Country, Passport, ConsulateCity, Date, Company, Arrival, Departure, Pronoun');
   };
   reader.readAsText(file);
 }
